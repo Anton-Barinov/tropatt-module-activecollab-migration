@@ -1,6 +1,6 @@
 {
     "name": "crm.activecollab-migration",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "vendor": "crm",
     "author": "Anton Barinov",
     "author_url": "https://github.com/Anton-Barinov",
@@ -19,10 +19,14 @@
     "web_routes": "web/config/routes.php",
     "migrations": "api/migration/",
     "assets": {
-        "js_routes": {"module-activecollab-migration": "web/assets/js/activecollab-migration.js"},
-        "css": ["web/assets/css/activecollab-migration.css"]
+        "js_routes": {
+            "module-activecollab-migration": "web/assets/js/activecollab-migration.js"
+        },
+        "css": [
+            "web/assets/css/activecollab-migration.css"
+        ]
     },
-    "hooks": {},
+    "hooks": [],
     "menu_items": [],
     "service_provider": "Module\\Crm\\ActiveCollabMigration\\ActiveCollabMigrationServiceProvider",
     "config_defaults": {
@@ -35,5 +39,6 @@
         "default_section_mode": "project_module",
         "max_tasks_per_job": 0,
         "webhooks_enabled_by_default": false
-    }
+    },
+    "signature": "8460ed935c29cb06799ec88d0b0d5c0b0a298c12ebfc6cca1c07f9a2a47c12c9"
 }

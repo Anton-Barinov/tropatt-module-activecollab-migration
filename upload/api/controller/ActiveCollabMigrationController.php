@@ -19,6 +19,15 @@ final class ActiveCollabMigrationController
     public function __construct(private readonly Container $container)
     {
         $this->repo = new ActiveCollabMigrationRepository($container->get('db.pdo'));
+        $auth = $container->has('auth_user') ? $container->get('auth_user') : [];
+        $actor = is_array($auth) && is_array($auth['user'] ?? null) ? $auth['user'] : [];
+        $request = $container->has('request') ? $container->get('request') : null;
+        $orgId = 0;
+        if ($request && $container->has('service.organization_context')) {
+            $resolved = $container->get('service.organization_context')->resolve($request, $actor);
+            if (($resolved['status'] ?? '') === 'active') $orgId = (int)($resolved['organization']['id'] ?? 0);
+        }
+        $this->repo->setOrganizationId($orgId);
     }
 
     private function body(): array
@@ -72,8 +81,27 @@ final class ActiveCollabMigrationController
         $input=$this->body();$name=trim((string)($input['name']??''));$token=trim((string)($input['access_token']??$input['token']??''));$baseUrl=trim((string)($input['base_url']??''));$accountId=trim((string)($input['account_id']??$input['workspace_gid']??''));
         if($name===''||$token===''||$baseUrl==='')return JsonResponse::error('VALIDATION_ERROR','name, base_url and access_token are required',422);
         if($accountId==='')return JsonResponse::error('ACTIVECOLLAB_ACCOUNT_ID_REQUIRED','account_id is required for an ActiveCollab API root',422);
+        try { ActiveCollabClient::assertAccountMatchesRoot($baseUrl, $accountId); } catch (\Throwable) { return JsonResponse::error('ACTIVECOLLAB_ACCOUNT_ROOT_MISMATCH','Account ID does not match the verified API root',422); }
         $connection=null;
         try{$client=new ActiveCollabClient($this->repo,$baseUrl);$connection=$this->repo->createConnection(['name'=>mb_substr($name,0,255),'base_url'=>$baseUrl,'workspace_gid'=>mb_substr($accountId,0,191),'auth_type'=>'pat','access_token_encrypted'=>EncryptionService::encrypt($token),'created_by_user_id'=>$this->actorId()]);$me=$client->me($token);$this->repo->updateConnectionCheck((string)$connection['public_id'],true,$accountId);return JsonResponse::success('ACTIVECOLLAB_CONNECTION_CREATED','Connection created and verified',['connection'=>$this->publicConnection($this->repo->getConnection((string)$connection['public_id'])??$connection),'source'=>$me],201);}catch(\Throwable $e){if(is_array($connection)&&!empty($connection['public_id']))$this->repo->updateConnectionCheck((string)$connection['public_id'],false,'ActiveCollab connection test failed');$code=$e->getMessage()==='ACTIVECOLLAB_AUTH_FAILED'?'ACTIVECOLLAB_AUTH_FAILED':($e->getMessage()==='ACTIVECOLLAB_BASE_URL_INVALID'?'ACTIVECOLLAB_BASE_URL_INVALID':'ACTIVECOLLAB_CONNECTION_TEST_FAILED');return JsonResponse::error($code,'ActiveCollab credentials or API root could not be verified',422);}
+    }
+
+    public function listLegacyConnections(): JsonResponse
+    {
+        if (empty($this->actor()['is_root'])) return JsonResponse::error('ROOT_REQUIRED', 'Only a root administrator can recover legacy connections', 403);
+        return JsonResponse::success('ACTIVECOLLAB_LEGACY_CONNECTIONS', 'OK', ['items' => $this->repo->listLegacyConnections($this->actorId())]);
+    }
+
+    public function assignLegacyConnection(array $params): JsonResponse
+    {
+        if (empty($this->actor()['is_root'])) return JsonResponse::error('ROOT_REQUIRED', 'Only a root administrator can assign a legacy connection', 403);
+        try {
+            $result = $this->repo->assignLegacyConnection((string)($params['public_id'] ?? ''), $this->actorId());
+            return JsonResponse::success('ACTIVECOLLAB_LEGACY_CONNECTION_ASSIGNED', 'Legacy connection assigned to the selected workspace; the assignment was recorded in the audit log', ['assignment' => $result]);
+        } catch (\Throwable $e) {
+            $code = in_array($e->getMessage(), ['ACTIVECOLLAB_LEGACY_CONNECTION_NOT_FOUND', 'ACTIVECOLLAB_LEGACY_CONNECTION_CHANGED', 'ACTIVECOLLAB_WORKSPACE_REQUIRED'], true) ? $e->getMessage() : 'ACTIVECOLLAB_LEGACY_RECOVERY_FAILED';
+            return JsonResponse::error($code, $code === 'ACTIVECOLLAB_WORKSPACE_REQUIRED' ? 'Select a workspace before assigning this legacy connection' : 'Legacy connection could not be assigned atomically', $code === 'ACTIVECOLLAB_LEGACY_CONNECTION_NOT_FOUND' ? 404 : 409);
+        }
     }
 
     public function getConnection(array $params): JsonResponse { $r=$this->connection((string)($params['public_id']??''));return$r instanceof JsonResponse?$r:JsonResponse::success('ACTIVECOLLAB_CONNECTION','OK',['connection'=>$this->publicConnection($r)]); }
@@ -82,8 +110,8 @@ final class ActiveCollabMigrationController
     {
         $r=$this->connection((string)($params['public_id']??''));if($r instanceof JsonResponse)return$r;$input=$this->body();$update=[];
         if(array_key_exists('name',$input))$update['name']=mb_substr(trim((string)$input['name']),0,255);
-        if(array_key_exists('base_url',$input)){$base=trim((string)$input['base_url']);try{new ActiveCollabClient($this->repo,$base);}catch(\Throwable){return JsonResponse::error('ACTIVECOLLAB_BASE_URL_INVALID','base_url must be an HTTPS ActiveCollab API root',422);}$update['base_url']=$base;}
-        if(array_key_exists('account_id',$input)||array_key_exists('workspace_gid',$input))$update['workspace_gid']=mb_substr(trim((string)($input['account_id']??$input['workspace_gid'])),0,191);
+        if(array_key_exists('base_url',$input) && trim((string)$input['base_url']) !== (string)$r['base_url'])return JsonResponse::error('ACTIVECOLLAB_SOURCE_IDENTITY_IMMUTABLE','Create a new connection to change the ActiveCollab API root',409);
+        if((array_key_exists('account_id',$input)||array_key_exists('workspace_gid',$input)) && trim((string)($input['account_id']??$input['workspace_gid'])) !== (string)$r['workspace_gid'])return JsonResponse::error('ACTIVECOLLAB_SOURCE_IDENTITY_IMMUTABLE','Create a new connection to change the source account',409);
         $newToken=trim((string)($input['access_token']??$input['token']??''));if($newToken!=='')$update['access_token_encrypted']=EncryptionService::encrypt($newToken);
         $this->repo->updateConnection((string)$params['public_id'],$update);if($newToken!==''||isset($update['base_url']))$this->repo->updateConnectionCheck((string)$params['public_id'],false,'Credentials or API root changed; test required');return JsonResponse::success('ACTIVECOLLAB_CONNECTION_UPDATED','Connection updated',['connection'=>$this->publicConnection($this->repo->getConnection((string)$params['public_id'])??[]) ]);
     }
@@ -105,7 +133,7 @@ final class ActiveCollabMigrationController
 
     public function discover(array $params): JsonResponse
     {
-        $r=$this->connection((string)($params['public_id']??''));if($r instanceof JsonResponse)return$r;$input=$this->body();$account=trim((string)($input['account_id']??$input['workspace_gid']??$r['workspace_gid']??''));if($account==='')return JsonResponse::error('ACTIVECOLLAB_ACCOUNT_ID_REQUIRED','account_id is required',422);$token=EncryptionService::decrypt((string)$r['access_token_encrypted']);if($token===null)return JsonResponse::error('ACTIVECOLLAB_CREDENTIAL_DECRYPT_FAILED','Could not decrypt credentials',500);try{$client=$this->client($r);$includeArchived=!empty($input['include_archived']);$projects=$client->projects($token,$includeArchived);$companies=$client->companies($token,$includeArchived);foreach($client->users($token)as$user){$this->repo->upsertUserMapping((int)$r['id'],$user);}return JsonResponse::success('ACTIVECOLLAB_DISCOVERY_COMPLETE','ActiveCollab source discovered',['account_id'=>$account,'projects'=>$projects,'companies'=>$companies,'user_mappings'=>$this->repo->listUserMappings((int)$r['id'])]);}catch(\Throwable){return JsonResponse::error('ACTIVECOLLAB_DISCOVERY_FAILED','ActiveCollab discovery failed',400);}
+        $r=$this->connection((string)($params['public_id']??''));if($r instanceof JsonResponse)return$r;$input=$this->body();$account=trim((string)($r['workspace_gid']??''));if($account==='' || (isset($input['account_id']) && trim((string)$input['account_id'])!==$account) || (isset($input['workspace_gid']) && trim((string)$input['workspace_gid'])!==$account))return JsonResponse::error('ACTIVECOLLAB_ACCOUNT_ID_REQUIRED','account_id is required',422);$token=EncryptionService::decrypt((string)$r['access_token_encrypted']);if($token===null)return JsonResponse::error('ACTIVECOLLAB_CREDENTIAL_DECRYPT_FAILED','Could not decrypt credentials',500);try{$client=$this->client($r);$includeArchived=!empty($input['include_archived']);$projects=$client->projects($token,$includeArchived);$companies=$client->companies($token,$includeArchived);foreach($client->users($token)as$user){$this->repo->upsertUserMapping((int)$r['id'],$user);}return JsonResponse::success('ACTIVECOLLAB_DISCOVERY_COMPLETE','ActiveCollab source discovered',['account_id'=>$account,'projects'=>$projects,'companies'=>$companies,'user_mappings'=>$this->repo->listUserMappings((int)$r['id'])]);}catch(\Throwable){return JsonResponse::error('ACTIVECOLLAB_DISCOVERY_FAILED','ActiveCollab discovery failed',400);}
     }
 
     public function listUserMappings(array $params): JsonResponse {$r=$this->connection((string)($params['public_id']??''));return$r instanceof JsonResponse?$r:JsonResponse::success('ACTIVECOLLAB_USER_MAPPINGS','OK',['items'=>$this->repo->listUserMappings((int)$r['id'])]);}
@@ -115,7 +143,7 @@ final class ActiveCollabMigrationController
     public function createJob(): JsonResponse {return$this->withIdempotency(fn():JsonResponse=>$this->createJobInternal());}
     private function createJobInternal(): JsonResponse
     {
-        $input=$this->body();$connection=$this->connection((string)($input['connection_public_id']??''));if($connection instanceof JsonResponse)return$connection;$account=trim((string)($input['account_id']??$input['workspace_gid']??$connection['workspace_gid']??''));if($account==='')return JsonResponse::error('ACTIVECOLLAB_ACCOUNT_ID_REQUIRED','account_id is required',422);$token=EncryptionService::decrypt((string)$connection['access_token_encrypted']);if($token===null)return JsonResponse::error('ACTIVECOLLAB_CREDENTIAL_DECRYPT_FAILED','Could not decrypt credentials',500);try{$this->client($connection)->me($token);}catch(\Throwable){return JsonResponse::error('ACTIVECOLLAB_SOURCE_UNAVAILABLE','ActiveCollab API is unavailable',422);}$mode=(string)($input['mode']??'import');if(!in_array($mode,['import','sync','dry_run'],true))return JsonResponse::error('VALIDATION_ERROR','mode must be import, sync or dry_run',422);$options=(array)($input['target_options']??$input['options']??[]);$includeTime=array_key_exists('include_time_records',$options)?(bool)$options['include_time_records']:true;$options['include_time_records']=$includeTime;if($mode!=='dry_run'&&$includeTime&&empty($this->actor()['is_root']))return JsonResponse::error('ACTIVECOLLAB_ROOT_REQUIRED','Imports of historical time records require a root user',403);$scope=(array)($input['source_scope']??[]);$scope['project_ids']=array_values(array_filter(array_map('strval',(array)($input['project_ids']??$scope['project_ids']??[]))));$job=$this->repo->createJob(['connection_id'=>(int)$connection['id'],'workspace_gid'=>$account,'mode'=>$mode,'source_scope'=>$scope,'target_options'=>$options,'created_by_user_id'=>$this->actorId()]);return JsonResponse::success('ACTIVECOLLAB_JOB_CREATED','Job created',['job'=>$job],201);
+        $input=$this->body();$connection=$this->connection((string)($input['connection_public_id']??''));if($connection instanceof JsonResponse)return$connection;$account=trim((string)($connection['workspace_gid']??''));if($account==='' || (isset($input['account_id']) && trim((string)$input['account_id'])!==$account) || (isset($input['workspace_gid']) && trim((string)$input['workspace_gid'])!==$account))return JsonResponse::error('ACTIVECOLLAB_ACCOUNT_ID_REQUIRED','account_id is required',422);$token=EncryptionService::decrypt((string)$connection['access_token_encrypted']);if($token===null)return JsonResponse::error('ACTIVECOLLAB_CREDENTIAL_DECRYPT_FAILED','Could not decrypt credentials',500);try{$this->client($connection)->me($token);}catch(\Throwable){return JsonResponse::error('ACTIVECOLLAB_SOURCE_UNAVAILABLE','ActiveCollab API is unavailable',422);}$mode=(string)($input['mode']??'import');if(!in_array($mode,['import','sync','dry_run'],true))return JsonResponse::error('VALIDATION_ERROR','mode must be import, sync or dry_run',422);$options=(array)($input['target_options']??$input['options']??[]);$includeTime=array_key_exists('include_time_records',$options)?(bool)$options['include_time_records']:true;$options['include_time_records']=$includeTime;if($mode!=='dry_run'&&$includeTime&&empty($this->actor()['is_root']))return JsonResponse::error('ACTIVECOLLAB_ROOT_REQUIRED','Imports of historical time records require a root user',403);$scope=(array)($input['source_scope']??[]);$scope['project_ids']=array_values(array_filter(array_map('strval',(array)($input['project_ids']??$scope['project_ids']??[]))));$job=$this->repo->createJob(['connection_id'=>(int)$connection['id'],'workspace_gid'=>$account,'mode'=>$mode,'source_scope'=>$scope,'target_options'=>$options,'created_by_user_id'=>$this->actorId()]);return JsonResponse::success('ACTIVECOLLAB_JOB_CREATED','Job created',['job'=>$job],201);
     }
     public function getJob(array $params): JsonResponse {$r=$this->job((string)($params['public_id']??''));return$r instanceof JsonResponse?$r:JsonResponse::success('ACTIVECOLLAB_JOB','OK',['job'=>$r]);}
     public function startJob(array $params): JsonResponse{return$this->changeJob((string)$params['public_id'],'queued','ACTIVECOLLAB_JOB_QUEUED');}

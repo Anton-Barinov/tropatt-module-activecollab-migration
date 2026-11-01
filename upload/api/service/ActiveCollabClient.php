@@ -161,8 +161,12 @@ final class ActiveCollabClient
             $port = (int)($parts['port'] ?? 443);
             if ($port !== 443) throw new RuntimeException('ACTIVECOLLAB_ATTACHMENT_PORT_NOT_ALLOWED');
             $sameHost = $host === strtolower((string)parse_url($this->baseUrl, PHP_URL_HOST));
-            $signed = $this->isSignedStorageUrl((string)($parts['query'] ?? ''));
-            if (!$sameHost && !$signed && !$this->isStorageHost($host)) throw new RuntimeException('ACTIVECOLLAB_ATTACHMENT_HOST_BLOCKED');
+            // A query-string signature proves possession of a URL, but does not
+            // establish that its host is a trusted file store. Otherwise a
+            // compromised/source-controlled API response could make the CRM
+            // fetch arbitrary public HTTPS URLs. Keep external downloads on the
+            // provider allowlist; signed AWS S3 URLs are covered by this check.
+            if (!$sameHost && !$this->isStorageHost($host)) throw new RuntimeException('ACTIVECOLLAB_ATTACHMENT_HOST_BLOCKED');
             $resolvedIp = $this->publicIpForHost($host);
 
             $tmp = tempnam(sys_get_temp_dir(), 'activecollab-');
@@ -326,12 +330,33 @@ final class ActiveCollabClient
         return array_is_list($payload) ? array_values(array_filter($payload, 'is_array')) : [];
     }
 
+    public static function assertAccountMatchesRoot(string $baseUrl, string $accountId): void
+    {
+        $parts = parse_url(self::normalizeBaseUrl($baseUrl));
+        $host = strtolower((string)($parts["host"] ?? ""));
+        if ($host === "app.activecollab.com") {
+            $path = (string)($parts["path"] ?? "");
+            $trimmedPath = trim($path, "/");
+            $segments = $trimmedPath === "" ? [] : explode("/", $trimmedPath);
+            if ($segments === [] || in_array("", $segments, true) || in_array(".", $segments, true) || in_array("..", $segments, true)) {
+                throw new RuntimeException("ACTIVECOLLAB_BASE_URL_INVALID");
+            }
+            $rootAccount = $segments[0];
+            if ($rootAccount !== $accountId) throw new RuntimeException("ACTIVECOLLAB_ACCOUNT_ROOT_MISMATCH");
+        }
+    }
+
     private static function normalizeBaseUrl(string $value): string
     {
         $value = trim($value);
         if ($value === '') return 'https://app.activecollab.com/api/v1';
         $parts = parse_url($value);
-        if (!is_array($parts) || ($parts['scheme'] ?? '') !== 'https' || empty($parts['host']) || isset($parts['user']) || isset($parts['pass'])) throw new RuntimeException('ACTIVECOLLAB_BASE_URL_INVALID');
+        if (!is_array($parts) || ($parts['scheme'] ?? '') !== 'https' || empty($parts['host']) || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment']) || preg_match('/[\x00-\x20\x7f]/', $value)) throw new RuntimeException('ACTIVECOLLAB_BASE_URL_INVALID');
+        $path = (string)($parts['path'] ?? '');
+        // API roots do not need percent-encoded paths. Reject all encoded bytes,
+        // dot segments, backslashes and doubled separators before any HTTP client
+        // or proxy can normalize the URL into a different ActiveCollab account.
+        if (str_contains($path, '%') || str_contains($path, '\\') || str_contains($path, '//') || preg_match('~(?:^|/)\.{1,2}(?:/|$)~', $path)) throw new RuntimeException('ACTIVECOLLAB_BASE_URL_INVALID');
         if (isset($parts['port']) && (int)$parts['port'] !== 443) throw new RuntimeException('ACTIVECOLLAB_BASE_URL_PORT_NOT_ALLOWED');
         return rtrim($value, '/');
     }
@@ -355,16 +380,6 @@ final class ActiveCollabClient
     private function isStorageHost(string $host): bool
     {
         return $host === 's3.amazonaws.com' || (bool)preg_match('/^(?:[^.]+\.)?s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$/', $host);
-    }
-
-    private function isSignedStorageUrl(string $query): bool
-    {
-        parse_str($query, $params);
-        $normalized = [];
-        foreach ($params as $key => $value) $normalized[strtolower((string)$key)] = trim((string)$value);
-        $signature = $normalized['x-amz-signature'] ?? $normalized['signature'] ?? '';
-        $expires = $normalized['x-amz-expires'] ?? $normalized['expires'] ?? '';
-        return $signature !== '' && strlen($signature) >= 16 && ctype_digit($expires) && (int)$expires > 0 && (int)$expires <= 604800;
     }
 
     /** @return array<int,string> */

@@ -18,6 +18,8 @@ final class ActiveCollabWorkerHandler
         $repo = new ActiveCollabMigrationRepository($container->get('db.pdo'));
         $job = $repo->claimNextJob();
         if ($job === null) return json_encode(['processed' => 0], JSON_UNESCAPED_UNICODE) ?: '{}';
+        $repo->setOrganizationId((int)($job['organization_id'] ?? 0));
+        if ((int)($job['organization_id'] ?? 0) < 1) return json_encode(['processed' => 0, 'blocked' => 1], JSON_UNESCAPED_UNICODE) ?: '{}';
         $token = (string)($job['lease_token'] ?? '');
         $client = new ActiveCollabClient($repo);
         $crawler = new ActiveCollabCrawler($client, $repo);

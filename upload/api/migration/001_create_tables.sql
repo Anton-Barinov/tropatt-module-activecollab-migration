@@ -1,6 +1,7 @@
 -- crm.activecollab-migration initial schema. MySQL/InnoDB only.
 CREATE TABLE IF NOT EXISTS `module_activecollab_connections` (
   `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `organization_id` BIGINT UNSIGNED NULL,
   `public_id` VARCHAR(64) NOT NULL UNIQUE,
   `name` VARCHAR(255) NOT NULL,
   `auth_type` VARCHAR(32) NOT NULL DEFAULT 'pat',
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS `module_activecollab_connections` (
 
 CREATE TABLE IF NOT EXISTS `module_activecollab_jobs` (
   `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `organization_id` BIGINT UNSIGNED NULL,
   `public_id` VARCHAR(64) NOT NULL UNIQUE,
   `connection_id` BIGINT UNSIGNED NOT NULL,
   `workspace_gid` VARCHAR(191) NOT NULL,
@@ -50,6 +52,7 @@ CREATE TABLE IF NOT EXISTS `module_activecollab_jobs` (
 
 CREATE TABLE IF NOT EXISTS `module_activecollab_job_items` (
   `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `organization_id` BIGINT UNSIGNED NULL,
   `job_id` BIGINT UNSIGNED NOT NULL,
   `source_type` VARCHAR(64) NOT NULL,
   `source_id` VARCHAR(191) NOT NULL,
@@ -76,6 +79,7 @@ CREATE TABLE IF NOT EXISTS `module_activecollab_job_items` (
 
 CREATE TABLE IF NOT EXISTS `module_activecollab_source_mappings` (
   `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `organization_id` BIGINT UNSIGNED NULL,
   `public_id` VARCHAR(64) NOT NULL UNIQUE,
   `connection_id` BIGINT UNSIGNED NOT NULL,
   `workspace_gid` VARCHAR(191) NOT NULL,
@@ -98,6 +102,7 @@ CREATE TABLE IF NOT EXISTS `module_activecollab_source_mappings` (
 
 CREATE TABLE IF NOT EXISTS `module_activecollab_user_mappings` (
   `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `organization_id` BIGINT UNSIGNED NULL,
   `connection_id` BIGINT UNSIGNED NOT NULL,
   `activecollab_user_gid` VARCHAR(191) NOT NULL,
   `display_name` VARCHAR(255) NULL,
@@ -112,6 +117,7 @@ CREATE TABLE IF NOT EXISTS `module_activecollab_user_mappings` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `module_activecollab_rate_limits` (
+  `organization_id` BIGINT UNSIGNED NULL,
   `connection_id` BIGINT UNSIGNED PRIMARY KEY,
   `requests_made` INT UNSIGNED NOT NULL DEFAULT 0,
   `window_started_at` DATETIME NULL,
@@ -123,6 +129,7 @@ CREATE TABLE IF NOT EXISTS `module_activecollab_rate_limits` (
 
 CREATE TABLE IF NOT EXISTS `module_activecollab_job_logs` (
   `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `organization_id` BIGINT UNSIGNED NULL,
   `job_id` BIGINT UNSIGNED NOT NULL,
   `level` VARCHAR(16) NOT NULL DEFAULT 'info',
   `step` VARCHAR(64) NULL,
@@ -135,6 +142,7 @@ CREATE TABLE IF NOT EXISTS `module_activecollab_job_logs` (
 
 CREATE TABLE IF NOT EXISTS `module_activecollab_unresolved_entities` (
   `id` BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  `organization_id` BIGINT UNSIGNED NULL,
   `job_id` BIGINT UNSIGNED NOT NULL,
   `source_type` VARCHAR(64) NOT NULL,
   `source_id` VARCHAR(191) NOT NULL,

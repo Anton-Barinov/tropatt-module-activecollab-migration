@@ -20,16 +20,25 @@
 
 ## Тест
 
-Локальные unit-регрессии не требуют credentials и не делают сетевых запросов:
+Публично доступные проверки не требуют credentials и не делают сетевых запросов:
 
 ```bash
-ACTIVECOLLAB_TEST_CONFIRM=1 \
-ACTIVECOLLAB_TEST_TOKEN=... \
-ACTIVECOLLAB_TEST_DB_DATABASE=crm_activecollab_test \
-ACTIVECOLLAB_TEST_DB_USER=root \
-ACTIVECOLLAB_TEST_DB_PASSWORD= \
-APP_SECRET=... \
-php upload/api/tests/ActiveCollabMigrationUnitTest.php
+find upload/modules/crm.activecollab-migration -name '*.php' -print0 | xargs -0 -n1 php -l
+node --check upload/modules/crm.activecollab-migration/web/assets/js/activecollab-migration.js
+php upload/api/scripts/module.php check crm.activecollab-migration
+php upload/api/scripts/generate_openapi.php
 ```
 
-Для реального API используйте отдельный стенд и отдельную БД. Перед production-импортом рекомендуется выполнить `dry_run`, затем небольшой job с одним проектом и проверить rollback.
+Автоматизированные регрессии и live-тест ActiveCollab выполняются в локальном тестовом наборе мейнтейнера и не входят в публичный репозиторий. Для реального API используйте отдельный стенд и отдельную БД. Перед production-импортом рекомендуется выполнить `dry_run`, затем небольшой job с одним проектом и проверить rollback.
+
+### Candidate workspace-scope patch
+
+New connections and jobs are bound to the active CRM workspace. API roots and account identity are immutable after creation; use a new connection to migrate a different ActiveCollab source. For upgrades, migration `003_workspace_scope.sql` backfills only owners with exactly one CRM workspace membership. Ambiguous legacy rows are retained with NULL `organization_id`. A root administrator can inspect them and explicitly assign each connection to the currently selected workspace; the assignment transaction propagates the workspace to unscoped jobs, mappings, items, logs, rate limits and unresolved records and writes an audit event. No workspace is inferred for ambiguous records.
+
+Candidate regression test (SQLite; no credentials or provider calls):
+
+```bash
+php tests/workspace_scope_test.php
+```
+
+The marketplace package signature must be regenerated during release packaging after any source changes.

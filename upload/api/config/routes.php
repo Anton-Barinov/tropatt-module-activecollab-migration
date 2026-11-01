@@ -5,6 +5,8 @@ use Module\Crm\ActiveCollabMigration\Controller\ActiveCollabMigrationController;
 
 return [
     ['methods' => ['GET'], 'route' => '/connections', 'controller' => ActiveCollabMigrationController::class, 'action' => 'listConnections', 'auth' => true, 'required_permissions' => ['module.activecollab-migration.view']],
+    ['methods' => ['GET'], 'route' => '/connections/legacy', 'controller' => ActiveCollabMigrationController::class, 'action' => 'listLegacyConnections', 'auth' => true, 'required_permissions' => ['module.activecollab-migration.view']],
+    ['methods' => ['POST'], 'route' => '/connections/{public_id}/assign-workspace', 'controller' => ActiveCollabMigrationController::class, 'action' => 'assignLegacyConnection', 'auth' => true, 'required_permissions' => ['module.activecollab-migration.manage']],
     ['methods' => ['POST'], 'route' => '/connections', 'controller' => ActiveCollabMigrationController::class, 'action' => 'createConnection', 'auth' => true, 'required_permissions' => ['module.activecollab-migration.manage', 'module.activecollab-migration.secret_manage']],
     ['methods' => ['GET'], 'route' => '/connections/{public_id}', 'controller' => ActiveCollabMigrationController::class, 'action' => 'getConnection', 'auth' => true, 'required_permissions' => ['module.activecollab-migration.view']],
     ['methods' => ['PATCH'], 'route' => '/connections/{public_id}', 'controller' => ActiveCollabMigrationController::class, 'action' => 'updateConnection', 'auth' => true, 'required_permissions' => ['module.activecollab-migration.manage', 'module.activecollab-migration.secret_manage']],
